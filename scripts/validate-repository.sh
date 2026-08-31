@@ -1,22 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$repo_root"
-export PYTHONPYCACHEPREFIX="$repo_root/.pycache"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+export PYTHONPYCACHEPREFIX="$root/.pycache"
 
-for script in scripts/*.sh; do
-  bash -n "$script"
-done
-
+bash -n run.sh scripts/validate-repository.sh
 shasum -a 256 -c CHECKSUMS.sha256
 python3 -m compileall -q scripts tests
 python3 -m unittest discover -s tests -v
-jq empty config/variants.json results/reference-results.json
+jq empty results/reference-results.json
+
+ruby -e '
+  require "yaml"
+  files = Dir["deploy/*.yaml"] + Dir["benchmark/*.yaml"] + Dir["model-cache/*.yaml"]
+  abort "no manifests found" if files.empty?
+  files.each { |path| YAML.load_file(path) }
+  abort "expected four direct DGD manifests" unless Dir["deploy/*.yaml"].length == 4
+'
+
+if rg --files -g '*.in' | grep -q .; then
+  echo "template .in files are not allowed" >&2
+  exit 1
+fi
+if rg -n '@@[A-Z0-9_]+@@' .; then
+  echo "unresolved custom template syntax found" >&2
+  exit 1
+fi
 
 python3 - <<'PY'
 import gzip, hashlib, json
 from pathlib import Path
+
 path = Path('data/toolagent-shape-trace.jsonl.gz')
 compressed = path.read_bytes()
 raw = gzip.decompress(compressed)

@@ -1,73 +1,88 @@
 # Dynamo Agent Optimization Skills
 
-A public-ready, reproducible experiment built with NVIDIA Dynamo Agent Optimization Skills for `Qwen/Qwen3-32B` on eight H100 GPUs.
+A compact, reproducible record of a Dynamo configuration optimization experiment for `Qwen/Qwen3-32B` on eight H100 GPUs.
 
-The best measured change was reducing vLLM `max_num_batched_tokens` from 8,192 to 4,096. On the frozen 5,775-request ToolAgent shape trace, strict goodput increased from **1.39999 to 1.75232 requests/s**—a **25.17% improvement**—with zero request errors.
+Using NVIDIA's Dynamo Agent Optimization Skills, we tested one change at a time against a frozen 5,775-request ToolAgent shape trace. Reducing vLLM `max_num_batched_tokens` from 8,192 to 4,096 increased strict goodput from **1.39999 to 1.75232 requests/s**—a **25.17% improvement**—with zero request errors.
 
 Strict goodput counts only requests satisfying both TTFT `< 5,000 ms` and ITL `< 100 ms`.
 
-## What This Repository Provides
+## Official Dynamo Pattern
 
-- Parameterized DynamoGraphDeployment templates with no cluster-specific names
-- Exact model, runtime, workload, and configuration pins
-- A shape-only trace containing no prompt or response content
-- Scripts for preflight, model caching, deployment, cold-state preparation, benchmarking, collection, analysis, and comparison
-- Sanitized aggregate results and a clear record of rejected candidates
-- Guidance for adding and evaluating future variants without invalidating the comparison
+Yes—Dynamo includes an official example of this kind of experiment: [`recipes/qwen3-32b`](https://github.com/ai-dynamo/dynamo/tree/main/recipes/qwen3-32b). It compares configurations with ordinary `deploy.yaml` and `perf.yaml` files, model-cache manifests, and README commands. The [Agent Optimization Skills](https://docs.dynamo.nvidia.com/dynamo/dev/digest/agent-optimization-skills) provide the experimental loop: establish an objective, isolate changes, benchmark with AIPerf, review evidence, and iterate.
 
-## Reference Result
+This repository follows that recipe shape. There is no custom manifest language and no render step:
 
-| Variant | Strict goodput | Strict-good requests | Decision |
-|---|---:|---:|---|
-| Baseline, batched tokens 8,192 | 1.39999 req/s | 1,709 / 5,775 | Baseline |
-| Batched tokens 4,096 | **1.75232 req/s** | **2,131 / 5,775** | **Promoted** |
-| Router decay 1.0 | 1.54545 req/s | 1,888 / 5,775 | Rejected |
-| GPU memory 0.95, two-run mean | 1.74880 req/s | — | Rejected |
+```text
+deploy/       One direct DGD YAML per measured configuration
+benchmark/    The frozen in-cluster AIPerf Job
+model-cache/  PVC and pinned model-download Job
+data/         Shape-only workload trace
+results/      Sanitized aggregate reference results
+scripts/      Offline analysis and repository validation
+docs/         Method and result details
+run.sh        Small deployment/benchmark driver
+```
 
-See [Results and interpretation](docs/results.md) for the complete story.
+## Configurations and Results
 
-## Quick Start
+| Manifest | One-variable change | Strict goodput | Decision |
+|---|---|---:|---|
+| [`baseline.yaml`](deploy/baseline.yaml) | `max_num_batched_tokens=8192` | 1.39999 req/s | Baseline |
+| [`winner-4096.yaml`](deploy/winner-4096.yaml) | `8192 -> 4096` | **1.75232 req/s** | **Promoted** |
+| [`router-decay-1.yaml`](deploy/router-decay-1.yaml) | router decay `0 -> 1.0` | 1.54545 req/s | Rejected |
+| [`gpu-memory-095.yaml`](deploy/gpu-memory-095.yaml) | GPU memory `0.90 -> 0.95` | 1.74880 req/s, two-run mean | Rejected |
 
-Prerequisites: a Kubernetes cluster with the NVIDIA Dynamo operator, eight H100 GPUs, `kubectl`, `jq`, `curl`, Ruby, and Python 3.
+The exact aggregate measurements are in [`results/reference-results.json`](results/reference-results.json). See [methodology](docs/methodology.md) and [results](docs/results.md) for interpretation.
+
+## Reproduce
+
+Prerequisites:
+
+- Kubernetes with the NVIDIA Dynamo operator
+- eight H100 GPUs available to the namespace
+- a ReadWriteMany storage class with at least 200 GiB
+- `kubectl`, `curl`, `jq`, `rg`, Python 3, Ruby, and access to the pinned Dynamo runtime image
+
+First edit `storageClassName` in [`model-cache/cache.yaml`](model-cache/cache.yaml). If the cluster mixes GPU types, add its H100 node selector to each DGD; the manifests deliberately avoid provider-specific labels.
+
+Then create the namespace and model-access Secret without writing the token to the repository:
 
 ```bash
-cp config/experiment.env.example config/experiment.env
-# Edit config/experiment.env for your cluster.
+export KUBE_CONTEXT=your-context
+export NAMESPACE=your-namespace
 
+kubectl --context "$KUBE_CONTEXT" create namespace "$NAMESPACE"
+read -s HF_TOKEN
+kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" create secret generic model-access \
+  --from-literal=HF_TOKEN="$HF_TOKEN"
+unset HF_TOKEN
+```
+
+Validate the repository, cache the exact model revision, and measure the baseline and winner:
+
+```bash
 ./scripts/validate-repository.sh
-./scripts/preflight.sh
-./scripts/prepare-model-cache.sh
+./run.sh model-cache
 
-# Correctness smoke followed by a full cold DGD replacement.
-./scripts/prepare-run.sh baseline
-./scripts/run-benchmark.sh baseline run-001
+./run.sh prepare baseline
+./run.sh benchmark baseline run-001
 
-./scripts/prepare-run.sh winner-4096
-./scripts/run-benchmark.sh winner-4096 run-001
+./run.sh prepare winner-4096
+./run.sh benchmark winner-4096 run-001
 
 ./scripts/compare.py \
   artifacts/baseline/run-001/strict-summary.json \
   artifacts/winner-4096/run-001/strict-summary.json
 ```
 
-The full setup, Secret creation, storage requirements, and collection behavior are described in [Reproducing the experiment](docs/reproduction.md).
+`prepare` deploys and smoke-tests the selected DGD, then replaces it once more so measurement begins with fresh worker KV caches. `benchmark` verifies the trace hash, runs the pinned AIPerf workload in-cluster, collects raw artifacts locally, and independently recomputes strict goodput. Local artifacts are ignored by Git.
 
-## Repository Map
+A reproduction should be evaluated by its controlled within-cluster delta, not by matching the reference environment's absolute throughput.
 
-```text
-config/       User-owned environment file and measured variant definitions
-data/         Frozen shape-only trace
-docs/         Methodology, results, reproduction, extension, and privacy guidance
-k8s/          Portable templates rendered from config/experiment.env
-results/      Sanitized aggregate reference results
-scripts/      Deploy, benchmark, analyze, compare, and validate workflows
-tests/        Offline tests for the strict-goodput analyzer
-```
+## Continue the Optimization
 
-## Status
+To continue with the official skills, clone the Dynamo repository and give the agent [`deploy/winner-4096.yaml`](deploy/winner-4096.yaml) as the confirmed baseline DGD. Keep the trace, model revision, hardware count, SLOs, and benchmark semantics fixed; add one direct YAML manifest per approved candidate and preserve raw run evidence outside Git.
 
-The 4,096-token winner is conclusive for the reference environment. The broader search is intentionally open: a 3,072-token candidate was reviewed but not measured, and TP2×4, FlashInfer attention, and native CPU KV offload remain worthwhile future families.
+The completed exercise shows that a single scheduler change materially improved SLO attainment. It does not claim that 4,096 is universally optimal: TP2 topology, FlashInfer attention, CPU KV offload, and a reviewed 3,072-token candidate remain open search families.
 
-Before publishing a fork, run `./scripts/validate-repository.sh` and review [Privacy and publishing](docs/privacy.md).
-
-No redistribution license has been selected yet. Choose an appropriate license before making the repository public.
+No redistribution license has been selected for this repository yet.

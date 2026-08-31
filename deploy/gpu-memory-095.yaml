@@ -1,14 +1,13 @@
 apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
 metadata:
-  name: @@DGD_NAME@@
+  name: toolagent-qwen32b
   labels:
-    app.kubernetes.io/part-of: dynamo-toolagent-optimization
-    experiment.variant: @@VARIANT@@
+    experiment.variant: gpu-memory-095
 spec:
   pvcs:
     - create: false
-      name: @@MODEL_CACHE_PVC@@
+      name: model-cache
   services:
     Frontend:
       componentType: frontend
@@ -17,7 +16,7 @@ spec:
         - name: DYN_ROUTER_MODE
           value: kv
         - name: DYN_ROUTER_KV_OVERLAP_SCORE_CREDIT_DECAY
-          value: "@@ROUTER_DECAY@@"
+          value: "0"
       resources:
         requests:
           cpu: "8"
@@ -25,41 +24,39 @@ spec:
           cpu: "8"
       extraPodSpec:
         mainContainer:
-          image: @@DYNAMO_IMAGE@@
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.4.1
           workingDir: /workspace
     VllmDecodeWorker:
       componentType: worker
       subComponentType: decode
-      replicas: @@WORKER_REPLICAS@@
-      envFromSecret: @@MODEL_SECRET_NAME@@
+      replicas: 8
+      envFromSecret: model-access
       resources:
         requests:
           gpu: "1"
         limits:
           gpu: "1"
       extraPodSpec:
-        nodeSelector:
-          @@GPU_NODE_LABEL_KEY@@: "@@GPU_NODE_LABEL_VALUE@@"
         tolerations:
           - key: nvidia.com/gpu
             operator: Exists
             effect: NoSchedule
         mainContainer:
-          image: @@DYNAMO_IMAGE@@
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.4.1
           workingDir: /workspace
           command: ["/bin/sh", "-c"]
           args:
             - >-
               python3 -m dynamo.vllm
-              --model @@MODEL_ID@@
-              --revision @@MODEL_REVISION@@
-              --served-model-name @@MODEL_ID@@
+              --model Qwen/Qwen3-32B
+              --revision 9216db5781bf21249d130ec9da846c4624c16137
+              --served-model-name Qwen/Qwen3-32B
               --quantization fp8
               --kv-cache-dtype fp8
               --max-model-len 131072
               --hf-overrides '{"rope_scaling":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768},"max_position_embeddings":131072}'
-              --gpu-memory-utilization @@GPU_MEMORY_UTILIZATION@@
-              --max-num-batched-tokens @@MAX_NUM_BATCHED_TOKENS@@
+              --gpu-memory-utilization 0.95
+              --max-num-batched-tokens 4096
               --block-size 64
               --async-scheduling
               --no-enable-log-requests
@@ -70,7 +67,7 @@ spec:
             - name: HF_HOME
               value: /home/dynamo/.cache/huggingface
             - name: HF_HUB_OFFLINE
-              value: "@@HF_HUB_OFFLINE@@"
+              value: "1"
           startupProbe:
             httpGet: {path: /health, port: 9090}
             initialDelaySeconds: 60
@@ -90,5 +87,5 @@ spec:
             timeoutSeconds: 10
             failureThreshold: 10
       volumeMounts:
-        - name: @@MODEL_CACHE_PVC@@
+        - name: model-cache
           mountPoint: /home/dynamo/.cache/huggingface

@@ -1,28 +1,17 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: @@BENCH_JOB_NAME@@
-  labels:
-    app.kubernetes.io/part-of: dynamo-toolagent-optimization
-    experiment.variant: @@VARIANT@@
-    experiment.run-id: @@RUN_ID@@
+  name: toolagent-benchmark
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 3600
   template:
-    metadata:
-      labels:
-        app.kubernetes.io/part-of: dynamo-toolagent-optimization
-        experiment.variant: @@VARIANT@@
-        experiment.run-id: @@RUN_ID@@
     spec:
       restartPolicy: Never
       terminationGracePeriodSeconds: 60
-      nodeSelector:
-        @@BENCH_NODE_LABEL_KEY@@: "@@BENCH_NODE_LABEL_VALUE@@"
       containers:
         - name: aiperf
-          image: @@BENCH_IMAGE@@
+          image: python:3.12-slim
           imagePullPolicy: IfNotPresent
           workingDir: /work
           command: ["/bin/bash", "-c"]
@@ -74,30 +63,30 @@ spec:
               apt-get update
               apt-get install -y --no-install-recommends build-essential ca-certificates git
               rm -rf /var/lib/apt/lists/*
-              pip install --no-cache-dir "aiperf==@@AIPERF_VERSION@@"
-              python3 -c "import aiperf; assert aiperf.__version__ == '@@AIPERF_VERSION@@'"
+              pip install --no-cache-dir "aiperf==0.10.0"
+              python3 -c "import aiperf; assert aiperf.__version__ == '0.10.0'"
 
               mkdir -p /artifacts/run
               set +e
               timeout --signal=TERM --kill-after=30s 1800s \
                 aiperf profile \
-                --model @@MODEL_ID@@ \
-                --endpoint-type chat \
-                --tokenizer @@TOKENIZER_PATH@@ \
-                --tokenizer-trust-remote-code \
-                --url http://@@DGD_NAME@@-frontend.@@NAMESPACE@@.svc.cluster.local:8000 \
-                --streaming \
-                --input-file /work/toolagent-shape-trace.jsonl \
-                --custom-dataset-type mooncake_trace \
-                --fixed-schedule \
-                --num-requests @@REQUEST_COUNT@@ \
-                --random-seed 42 \
-                --extra-inputs ignore_eos:true \
-                --goodput "time_to_first_token:@@TTFT_THRESHOLD_MS@@ inter_token_latency:@@ITL_THRESHOLD_MS@@" \
-                --request-timeout-seconds 600 \
-                --ui simple \
-                --artifact-dir /artifacts/run \
-                --export-http-trace
+                  --model Qwen/Qwen3-32B \
+                  --endpoint-type chat \
+                  --tokenizer /root/.cache/huggingface/hub/models--Qwen--Qwen3-32B/snapshots/9216db5781bf21249d130ec9da846c4624c16137 \
+                  --tokenizer-trust-remote-code \
+                  --url http://toolagent-qwen32b-frontend:8000 \
+                  --streaming \
+                  --input-file /work/toolagent-shape-trace.jsonl \
+                  --custom-dataset-type mooncake_trace \
+                  --fixed-schedule \
+                  --num-requests 5775 \
+                  --random-seed 42 \
+                  --extra-inputs ignore_eos:true \
+                  --goodput "time_to_first_token:5000 inter_token_latency:100" \
+                  --request-timeout-seconds 600 \
+                  --ui simple \
+                  --artifact-dir /artifacts/run \
+                  --export-http-trace
               status=$?
               set -e
 
@@ -110,7 +99,7 @@ spec:
               hold_and_exit "$status"
           envFrom:
             - secretRef:
-                name: @@MODEL_SECRET_NAME@@
+                name: model-access
           env:
             - name: HF_HOME
               value: /root/.cache/huggingface
@@ -141,9 +130,9 @@ spec:
       volumes:
         - name: trace
           configMap:
-            name: @@TRACE_CONFIGMAP@@
+            name: toolagent-shape-trace
         - name: artifacts
           emptyDir: {}
         - name: model-cache
           persistentVolumeClaim:
-            claimName: @@MODEL_CACHE_PVC@@
+            claimName: model-cache

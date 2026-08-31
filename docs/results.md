@@ -1,44 +1,24 @@
-# Results and Interpretation
+# Results
 
-## Best Configuration
+## Winner
 
-The winning configuration retained eight TP1 workers, FP8 weights/KV, 131,072-token context, block size 64, GPU memory utilization 0.90, async scheduling, and KV-aware routing. Its only change from baseline was:
+The best configuration retained eight TP1 workers, FP8 weights and KV cache, 131,072-token context, block size 64, GPU memory utilization 0.90, async scheduling, and KV-aware routing. Its sole change from baseline was:
 
 ```text
 max_num_batched_tokens: 8192 -> 4096
 ```
 
-It produced:
+It produced 1.7523235 strict-good requests/s (2,131 of 5,775), a 25.17% improvement over baseline, with zero errors. Average TTFT fell 27.50%, average ITL 43.17%, and average request latency 23.68%.
 
-- Strict goodput: **1.7523235 requests/s**
-- Strict-good requests: **2,131 / 5,775**
-- Improvement over baseline: **25.17%**
-- Total request throughput: **4.74879 requests/s**
-- Output throughput: **863.69 tokens/s**
-- Request errors: **0**
-
-Average TTFT fell 27.50%, average ITL fell 43.17%, and average request latency fell 23.68% relative to baseline.
-
-## Candidate Outcomes
+## Search Record
 
 | Candidate | Outcome | Interpretation |
 |---|---|---|
-| Batched tokens `8192 -> 4096` | +25.17%; promoted | Lower scheduling budget materially improved latency-SLO attainment. |
-| Router KV overlap decay `0 -> 1.0` | −11.81%; rejected | Worker balance improved, but useful locality was lost and client goodput regressed. |
-| GPU memory utilization `0.90 -> 0.95` | Two-run mean −0.20%; rejected | KV blocks increased 9.33%, but extra capacity did not improve the primary objective. |
-| Batched tokens `4096 -> 3072` | Reviewed, unmeasured | Next sequential scheduler candidate. |
+| Batched tokens `8192 -> 4096` | +25.17%; promoted | The lower scheduling budget materially improved latency-SLO attainment. |
+| Router decay `0 -> 1.0` | −11.81%; rejected | Better worker balance did not compensate for lost useful locality. |
+| GPU memory `0.90 -> 0.95` | two-run mean −0.20%; rejected | More KV blocks did not improve the primary objective. |
+| Batched tokens `4096 -> 3072` | reviewed, unmeasured | A valid next scheduler candidate, not a result. |
 
-Machine-readable values are in [`reference-results.json`](../results/reference-results.json).
+Machine-readable aggregate evidence is in [`reference-results.json`](../results/reference-results.json). Absolute performance is environment-dependent; reproduce the within-cluster comparison.
 
-## Open Search Space
-
-The following families remain suitable for future work:
-
-- Four TP2 workers using the same eight GPUs
-- FlashInfer instead of FlashAttention 3
-- Native CPU KV offload through vLLM's `OffloadingConnector`
-- The reviewed 3,072-token scheduler candidate
-
-Speculative decoding needs a compatible method or draft model before it becomes an exact candidate. Disaggregated serving needs a qualified transport/topology and isolated role-rate measurements.
-
-The measured winner is conclusive; the broader optimization objective is not exhausted.
+The 4,096-token winner is conclusive for the measured series. TP2 topology, FlashInfer attention, native CPU KV offload, and the 3,072-token candidate remain open families.
