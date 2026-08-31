@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: toolagent-model-download
+  labels:
+    app.kubernetes.io/part-of: dynamo-toolagent-optimization
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: download
+          image: @@DYNAMO_IMAGE@@
+          command: ["python3", "-c"]
+          args:
+            - >-
+              import os;
+              from huggingface_hub import snapshot_download;
+              path=snapshot_download(repo_id=os.environ['MODEL_ID'],revision=os.environ['MODEL_REVISION'],cache_dir=os.environ['HF_HOME']);
+              print(path)
+          envFrom:
+            - secretRef:
+                name: @@MODEL_SECRET_NAME@@
+          env:
+            - name: MODEL_ID
+              value: @@MODEL_ID@@
+            - name: MODEL_REVISION
+              value: @@MODEL_REVISION@@
+            - name: HF_HOME
+              value: /cache
+          volumeMounts:
+            - name: model-cache
+              mountPath: /cache
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: @@MODEL_CACHE_PVC@@

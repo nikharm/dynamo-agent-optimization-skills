@@ -1,0 +1,149 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: @@BENCH_JOB_NAME@@
+  labels:
+    app.kubernetes.io/part-of: dynamo-toolagent-optimization
+    experiment.variant: @@VARIANT@@
+    experiment.run-id: @@RUN_ID@@
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: dynamo-toolagent-optimization
+        experiment.variant: @@VARIANT@@
+        experiment.run-id: @@RUN_ID@@
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        @@BENCH_NODE_LABEL_KEY@@: "@@BENCH_NODE_LABEL_VALUE@@"
+      containers:
+        - name: aiperf
+          image: @@BENCH_IMAGE@@
+          imagePullPolicy: IfNotPresent
+          workingDir: /work
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+
+              hold_and_exit() {
+                local status="$1"
+                trap - ERR
+                set +e
+                for attempt in $(seq 1 180); do
+                  if [ -f /artifacts/COLLECTED ]; then
+                    exit "$status"
+                  fi
+                  sleep 5
+                done
+                echo "artifacts were not collected before the hold timeout" >&2
+                exit 1
+              }
+
+              fail_and_hold() {
+                local status=$?
+                trap - ERR
+                set +e
+                mkdir -p /artifacts/run
+                printf '%s\n' "$status" > /artifacts/exit-status
+                touch /artifacts/AIPERF_FAILED
+                hold_and_exit "$status"
+              }
+
+              trap fail_and_hold ERR
+
+              python3 - <<'PY'
+              import gzip, hashlib, json
+              from pathlib import Path
+              source = Path('/input/toolagent-shape-trace.jsonl.gz')
+              compressed = source.read_bytes()
+              raw = gzip.decompress(compressed)
+              assert hashlib.sha256(compressed).hexdigest() == 'f081d6352e0f02862fb242146372b47ececc6f661e92935c528dcceefbdfcb20'
+              assert hashlib.sha256(raw).hexdigest() == 'ce4308b6f19d10fdaf79f10179b04dcb652f4fcc4cf26e5c1388f6e575fc37b2'
+              rows = [json.loads(line) for line in raw.splitlines()]
+              assert len(rows) == 5775
+              assert rows[0]['timestamp'] == 0 and rows[-1]['timestamp'] == 1196248
+              Path('/work/toolagent-shape-trace.jsonl').write_bytes(raw)
+              print('trace validation passed')
+              PY
+
+              apt-get update
+              apt-get install -y --no-install-recommends build-essential ca-certificates git
+              rm -rf /var/lib/apt/lists/*
+              pip install --no-cache-dir "aiperf==@@AIPERF_VERSION@@"
+              python3 -c "import aiperf; assert aiperf.__version__ == '@@AIPERF_VERSION@@'"
+
+              mkdir -p /artifacts/run
+              set +e
+              timeout --signal=TERM --kill-after=30s 1800s \
+                aiperf profile \
+                --model @@MODEL_ID@@ \
+                --endpoint-type chat \
+                --tokenizer @@TOKENIZER_PATH@@ \
+                --tokenizer-trust-remote-code \
+                --url http://@@DGD_NAME@@-frontend.@@NAMESPACE@@.svc.cluster.local:8000 \
+                --streaming \
+                --input-file /work/toolagent-shape-trace.jsonl \
+                --custom-dataset-type mooncake_trace \
+                --fixed-schedule \
+                --num-requests @@REQUEST_COUNT@@ \
+                --random-seed 42 \
+                --extra-inputs ignore_eos:true \
+                --goodput "time_to_first_token:@@TTFT_THRESHOLD_MS@@ inter_token_latency:@@ITL_THRESHOLD_MS@@" \
+                --request-timeout-seconds 600 \
+                --ui simple \
+                --artifact-dir /artifacts/run \
+                --export-http-trace
+              status=$?
+              set -e
+
+              printf '%s\n' "$status" > /artifacts/exit-status
+              if [ "$status" -eq 0 ]; then
+                touch /artifacts/AIPERF_DONE
+              else
+                touch /artifacts/AIPERF_FAILED
+              fi
+              hold_and_exit "$status"
+          envFrom:
+            - secretRef:
+                name: @@MODEL_SECRET_NAME@@
+          env:
+            - name: HF_HOME
+              value: /root/.cache/huggingface
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: AIPERF_HTTP_CONNECTION_LIMIT
+              value: "1024"
+            - name: AIPERF_HTTP_SO_RCVTIMEO
+              value: "600"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: 16Gi
+            limits:
+              cpu: "14"
+              memory: 32Gi
+          volumeMounts:
+            - name: trace
+              mountPath: /input
+              readOnly: true
+            - name: artifacts
+              mountPath: /artifacts
+            - name: model-cache
+              mountPath: /root/.cache/huggingface
+              readOnly: true
+      volumes:
+        - name: trace
+          configMap:
+            name: @@TRACE_CONFIGMAP@@
+        - name: artifacts
+          emptyDir: {}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: @@MODEL_CACHE_PVC@@

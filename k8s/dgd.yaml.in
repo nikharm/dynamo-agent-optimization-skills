@@ -1,0 +1,94 @@
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: @@DGD_NAME@@
+  labels:
+    app.kubernetes.io/part-of: dynamo-toolagent-optimization
+    experiment.variant: @@VARIANT@@
+spec:
+  pvcs:
+    - create: false
+      name: @@MODEL_CACHE_PVC@@
+  services:
+    Frontend:
+      componentType: frontend
+      replicas: 1
+      envs:
+        - name: DYN_ROUTER_MODE
+          value: kv
+        - name: DYN_ROUTER_KV_OVERLAP_SCORE_CREDIT_DECAY
+          value: "@@ROUTER_DECAY@@"
+      resources:
+        requests:
+          cpu: "8"
+        limits:
+          cpu: "8"
+      extraPodSpec:
+        mainContainer:
+          image: @@DYNAMO_IMAGE@@
+          workingDir: /workspace
+    VllmDecodeWorker:
+      componentType: worker
+      subComponentType: decode
+      replicas: @@WORKER_REPLICAS@@
+      envFromSecret: @@MODEL_SECRET_NAME@@
+      resources:
+        requests:
+          gpu: "1"
+        limits:
+          gpu: "1"
+      extraPodSpec:
+        nodeSelector:
+          @@GPU_NODE_LABEL_KEY@@: "@@GPU_NODE_LABEL_VALUE@@"
+        tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+        mainContainer:
+          image: @@DYNAMO_IMAGE@@
+          workingDir: /workspace
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              python3 -m dynamo.vllm
+              --model @@MODEL_ID@@
+              --revision @@MODEL_REVISION@@
+              --served-model-name @@MODEL_ID@@
+              --quantization fp8
+              --kv-cache-dtype fp8
+              --max-model-len 131072
+              --hf-overrides '{"rope_scaling":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768},"max_position_embeddings":131072}'
+              --gpu-memory-utilization @@GPU_MEMORY_UTILIZATION@@
+              --max-num-batched-tokens @@MAX_NUM_BATCHED_TOKENS@@
+              --block-size 64
+              --async-scheduling
+              --no-enable-log-requests
+              --kv-events-config '{"publisher":"zmq","topic":"kv-events","endpoint":"tcp://*:20080","enable_kv_cache_events":true}'
+          env:
+            - name: DYN_HEALTH_CHECK_ENABLED
+              value: "false"
+            - name: HF_HOME
+              value: /home/dynamo/.cache/huggingface
+            - name: HF_HUB_OFFLINE
+              value: "@@HF_HUB_OFFLINE@@"
+          startupProbe:
+            httpGet: {path: /health, port: 9090}
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 90
+          livenessProbe:
+            httpGet: {path: /live, port: 9090}
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
+          readinessProbe:
+            httpGet: {path: /live, port: 9090}
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
+      volumeMounts:
+        - name: @@MODEL_CACHE_PVC@@
+          mountPoint: /home/dynamo/.cache/huggingface

@@ -1,0 +1,10 @@
+.DS_Store
+.env
+config/experiment.env
+.rendered/
+.pycache/
+.venv/
+__pycache__/
+artifacts/
+*.pyc
+*.tmp
