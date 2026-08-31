@@ -1,6 +1,6 @@
-# Dynamo ToolAgent Optimization
+# Dynamo Agent Optimization Skills
 
-A public-ready, reproducible record of an NVIDIA Dynamo configuration optimization exercise for `Qwen/Qwen3-32B` on eight H100 GPUs.
+A public-ready, reproducible experiment built with NVIDIA Dynamo Agent Optimization Skills for `Qwen/Qwen3-32B` on eight H100 GPUs.
 
 The best measured change was reducing vLLM `max_num_batched_tokens` from 8,192 to 4,096. On the frozen 5,775-request ToolAgent shape trace, strict goodput increased from **1.39999 to 1.75232 requests/s**—a **25.17% improvement**—with zero request errors.
 
