@@ -6,11 +6,9 @@ Using NVIDIA's Dynamo Agent Optimization Skills, we tested one change at a time 
 
 Strict goodput counts only requests satisfying both TTFT `< 5,000 ms` and ITL `< 100 ms`.
 
-## Official Dynamo Pattern
+## Repository Layout
 
-Yes—Dynamo includes an official example of this kind of experiment: [`recipes/qwen3-32b`](https://github.com/ai-dynamo/dynamo/tree/main/recipes/qwen3-32b). It compares configurations with ordinary `deploy.yaml` and `perf.yaml` files, model-cache manifests, and README commands. The [Agent Optimization Skills](https://docs.dynamo.nvidia.com/dynamo/dev/digest/agent-optimization-skills) provide the experimental loop: establish an objective, isolate changes, benchmark with AIPerf, review evidence, and iterate.
-
-This repository follows that recipe shape. There is no custom manifest language and no render step:
+The repository uses direct Kubernetes manifests with no custom manifest language or render step:
 
 ```text
 deploy/       One direct DGD YAML per measured configuration
