@@ -6,11 +6,14 @@ Using NVIDIA's Dynamo Agent Optimization Skills, we tested one change at a time 
 
 Strict goodput counts only requests satisfying both TTFT `< 5,000 ms` and ITL `< 100 ms`.
 
+The complete objective, setup, iteration history, evidence, limitations, and conclusion are documented in the [experiment report](REPORT.md).
+
 ## Repository Layout
 
 The repository uses direct Kubernetes manifests with no custom manifest language or render step:
 
 ```text
+REPORT.md    Complete experiment narrative and conclusions
 deploy/       One direct DGD YAML per measured configuration
 benchmark/    The frozen in-cluster AIPerf Job
 model-cache/  PVC and pinned model-download Job
